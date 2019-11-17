@@ -1,0 +1,4 @@
+templates.cc
+templates.h
+*.o
+*.bin
