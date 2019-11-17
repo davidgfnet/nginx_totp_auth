@@ -101,6 +101,10 @@ private:
 	}
 
 	std::string process_req(web_req *req, const web_t *wcfg) {
+		std::string rpage = req->getvars["follow_page"];
+		if (rpage.empty())
+			rpage = req->postvars["follow_page"];
+
 		if (req->uri == "/auth") {
 			// Read cookie and validate the authorization
 			bool authed = check_cookie(req->cookies["authentication-token"], wcfg);
@@ -126,7 +130,6 @@ private:
 					std::cerr << "Login with user " << user << " successful" << std::endl;
 
 					// Render a redirect page to the redirect address (+cookie)
-					std::string rpage = req->cookies["follow_page"];
 					std::string token = create_cookie(user);
 					return "Status: 302\r\nSet-Cookie: authentication-token=" + token +
 					       "\r\nLocation: " + stripnl(rpage) + "\r\n\r\n";
@@ -140,21 +143,15 @@ private:
 				return "Status: 500\r\nContent-Type: text/plain\r\n"
 					   "Content-Length: 23\r\n\r\nCould not find template";
 			else {
-				std::string page = templates.at(wcfg->webtemplate)(req->host, lerror);
+				std::string page = templates.at(wcfg->webtemplate)(req->host, rpage, lerror);
 				return "Status: 200\r\nContent-Type: text/html\r\n"
 					   "Content-Length: " + std::to_string(page.size()) + "\r\n\r\n" + page;
 			}
 		}
 		else if (req->uri == "/logout") {
 			// Just redirect to the page (if present, otherwise login) deleting cookie
-			std::string rpage = "/login";
-			if (req->cookies.count("follow_page"))
-				rpage = req->cookies["follow_page"];
-			if (req->getvars.count("follow_page"))
-				rpage = req->getvars["follow_page"];
-
 			return "Status: 302\r\nSet-Cookie: authentication-token=null\r\n"
-				   "Location: " + rpage + "\r\n\r\n";
+				   "Location: /login\r\n\r\n";
 		}
 		return "Status: 404\r\nContent-Type: text/plain\r\n"
 			   "Content-Length: 48\r\nNot found, valid endpoints: /auth /login /logout\r\n\r\n";
