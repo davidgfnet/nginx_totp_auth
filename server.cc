@@ -105,6 +105,8 @@ private:
 		std::string rpage = req->getvars["follow_page"];
 		if (rpage.empty())
 			rpage = req->postvars["follow_page"];
+		if (rpage.empty())
+			rpage = "/";    // Make sure we never return empty location, default to index
 
 		if (req->uri == "/auth") {
 			// Read cookie and validate the authorization
