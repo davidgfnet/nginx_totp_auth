@@ -185,7 +185,6 @@ public:
 	}
 
 	static unsigned totp_calc(std::string key, uint32_t epoch) {
-		std::cout << hexencode(key) << std::endl;
 		// Key comes in binary format already!
 		// Concatenate the epoc in big endian fashion
 		uint8_t msg [8] = {
