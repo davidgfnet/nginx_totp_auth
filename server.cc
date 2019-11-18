@@ -119,9 +119,9 @@ private:
 		else if (req->uri == "/login") {
 			bool lerror = false;
 			if (req->method == "POST") {
-				std::string user = req->postvars["u"];
-				std::string pass = req->postvars["p"];
-				unsigned    totp = atoi(req->postvars["t"].c_str());
+				std::string user = req->postvars["username"];
+				std::string pass = req->postvars["password"];
+				unsigned    totp = atoi(req->postvars["totp"].c_str());
 				std::cerr << "Login attempt for user " << user << std::endl;
 				// Validate the authentication to issue a cookie or throw an error
 				if (wcfg->users.count(user) &&
