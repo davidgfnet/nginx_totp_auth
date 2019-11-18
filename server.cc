@@ -2,8 +2,8 @@
 // Nginx authentication via TOTP. Subrequest authentication
 // using a local FastCGI server.
 
-// The auth endpoint is simply /
-// The server will produce a 401 error whenever the request
+// The auth endpoint is at /auth
+// The server will produce a 403 error whenever the request
 // lacks the right authentication Cookie. This error must be
 // caught by nginx and handled as a redirection to /login
 // which will serve the login page configured.
@@ -14,6 +14,7 @@
 #include <thread>
 #include <mutex>
 #include <regex>
+#include <memory>
 #include <unordered_map>
 #include <fstream>
 #include <fcgio.h>
@@ -27,7 +28,7 @@
 #include "util.h"
 
 // Use some reasonable default.
-unsigned nthreads = 4;
+int nthreads = 4;
 
 // 0 means only current code is valid, 1 means past and future code is also valid
 // 2 would mean the last 2 and future 2 are valid, and so on.
@@ -93,7 +94,7 @@ private:
 			return false;
 		unsigned duration = wcfg->users.at(user).sduration;
 		// Not valid if the cookie is too old
-		if (time(0) > ets + duration)
+		if ((unsigned)time(0) > ets + duration)
 			return false;
 		// Finally check the HMAC with the secret to ensure the cookie is valid
 		std::string hmac_calc = hmac_sha1(this->cookie_secret, cookie.substr(0, p2));
@@ -273,16 +274,16 @@ int main(int argc, char **argv) {
 
     config_t cfg;
     config_init(&cfg);
-
 	if (!config_read_file(&cfg, argv[1]))
 		RET_ERR("Error reading config file");
 
 	// Read config vars
-	const char *logfile, *secret = "";
+	const char *secret = "";
 	config_lookup_int(&cfg, "nthreads", (int*)&nthreads);
+	nthreads = std::max(nthreads, 1);
+	// Number of generations to consider valid for an OTP code
 	config_lookup_int(&cfg, "totp_generations", (int*)&totp_generations);
-	if (!config_lookup_string(&cfg, "logs", &logfile))
-		logfile = "/tmp/";
+	// Secret holds the server secret used to create cookies
 	config_lookup_string(&cfg, "secret", &secret);
 
 	config_setting_t *webs_cfg = config_lookup(&cfg, "webs");
@@ -331,13 +332,10 @@ int main(int argc, char **argv) {
 	signal(SIGPIPE, SIG_IGN);
 
 	// Start worker threads for this
-	if (!nthreads)
-		nthreads = 1;
-
 	ConcurrentQueue<std::unique_ptr<FCGX_Request>> reqqueue;
-	AuthenticationServer *workers[nthreads];
-	for (unsigned i = 0; i < nthreads; i++)
-		workers[i] = new AuthenticationServer(&reqqueue, secret);
+	std::vector<std::unique_ptr<AuthenticationServer>> workers;
+	for (int i = 0; i < nthreads; i++)
+		workers.emplace_back(new AuthenticationServer(&reqqueue, secret));
 
 	std::cerr << "All workers up, serving until SIGINT/SIGTERM" << std::endl;
 
@@ -354,10 +352,7 @@ int main(int argc, char **argv) {
 
 	std::cerr << "Signal caught! Starting shutdown" << std::endl;
 	reqqueue.close();
-
-	// Just go ahead and delete workers
-	for (unsigned i = 0; i < nthreads; i++)
-		delete workers[i];
+	workers.clear();
 
 	std::cerr << "All clear, service is down" << std::endl;
 }
