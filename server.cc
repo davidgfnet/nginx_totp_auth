@@ -3,7 +3,7 @@
 // using a local FastCGI server.
 
 // The auth endpoint is at /auth
-// The server will produce a 403 error whenever the request
+// The server will produce a 401 error whenever the request
 // lacks the right authentication Cookie. This error must be
 // caught by nginx and handled as a redirection to /login
 // which will serve the login page configured.
@@ -115,7 +115,7 @@ private:
 				return "Status: 200\r\nContent-Type: text/plain\r\n"
 				       "Content-Length: 24\r\n\r\nAuthentication Succeeded";
 			else
-				return "Status: 403\r\nContent-Type: text/plain\r\n"
+				return "Status: 401\r\nContent-Type: text/plain\r\n"
 				       "Content-Length: 21\r\n\r\nAuthentication Denied";
 		}
 		else if (req->uri == "/login") {
