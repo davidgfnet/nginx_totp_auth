@@ -22,10 +22,13 @@
 #include <signal.h>
 #include <libconfig.h>
 #include <list>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "templates.h"
 #include "queue.h"
 #include "util.h"
+#include "ratelimit.h"
 
 // Use some reasonable default.
 int nthreads = 4;
@@ -54,6 +57,7 @@ std::unordered_map<std::string, web_t> webcfg;   // Hostname -> Config
 struct web_req {
 	std::string method, host, uri;
 	StrMap getvars, postvars, cookies;
+	uint64_t ip64;
 };
 
 class AuthenticationServer {
@@ -66,6 +70,9 @@ private:
 
 	// Shared queue
 	ConcurrentQueue<std::unique_ptr<FCGX_Request>> *rq;
+
+	// Rate limiter for auth attempts
+	RateLimiter* const rl;
 
 	// Signal end of workers
 	bool end;
@@ -119,6 +126,14 @@ private:
 				       "Content-Length: 21\r\n\r\nAuthentication Denied";
 		}
 		else if (req->uri == "/login") {
+			// Die hard if someone's bruteforcing this
+			if (rl->check(req->ip64)) {
+				std::cerr << "Rate limit hit for ip id " << req->ip64 << std::endl;
+				return "Status: 429\r\nContent-Type: text/plain\r\n"
+					   "Content-Length: 34\r\n\r\nToo many requests, request blocked";
+			}
+			rl->consume(req->ip64);
+
 			bool lerror = false;
 			if (req->method == "POST") {
 				std::string user = req->postvars["username"];
@@ -162,8 +177,8 @@ private:
 
 public:
 	AuthenticationServer(ConcurrentQueue<std::unique_ptr<FCGX_Request>> *rq,
-		std::string csecret)
-	: rq(rq), end(false)
+		std::string csecret, RateLimiter* const rl)
+	: rq(rq), rl(rl), end(false)
 	{
 		// Use work() as thread entry point
 		cthread = std::thread(&AuthenticationServer::work, this);
@@ -234,6 +249,18 @@ public:
 				wreq.host     = FCGX_GetParam("HTTP_HOST", req->envp) ?: "";
 				wreq.cookies  = parse_cookies(FCGX_GetParam("HTTP_COOKIE", req->envp) ?: "");
 
+				// Extract source IP
+				const char *sip = FCGX_GetParam("REMOTE_ADDR", req->envp) ?: "0.0.0.0";
+				struct in6_addr res6; struct in_addr res4;
+				if (inet_pton(AF_INET6, sip, &res6) == 1)
+					wreq.ip64 = ((uint64_t)res6.s6_addr[0] << 40) | ((uint64_t)res6.s6_addr[1] << 32) |
+					            ((uint64_t)res6.s6_addr[2] << 24) | ((uint64_t)res6.s6_addr[3] << 16) |
+					            ((uint64_t)res6.s6_addr[4] <<  8) | ((uint64_t)res6.s6_addr[5]);
+				else if (inet_pton(AF_INET, sip, &res4) == 1)
+					wreq.ip64 = res4.s_addr;
+				else
+					wreq.ip64 = 0;
+
 				// Lookup hostname for this request
 				if (!webcfg.count(wreq.host)) {
 					std::cerr << "Failed to find host " << wreq.host << std::endl;
@@ -279,12 +306,15 @@ int main(int argc, char **argv) {
 		RET_ERR("Error reading config file");
 
 	// Read config vars
-	const char *secret = "";
 	config_lookup_int(&cfg, "nthreads", (int*)&nthreads);
 	nthreads = std::max(nthreads, 1);
+	// Number of auth attempts (per ~IP?) per second
+	unsigned auths_per_second = 2;
+	config_lookup_int(&cfg, "auth_per_second", (int*)&auths_per_second);
 	// Number of generations to consider valid for an OTP code
 	config_lookup_int(&cfg, "totp_generations", (int*)&totp_generations);
 	// Secret holds the server secret used to create cookies
+	const char *secret = "";
 	config_lookup_string(&cfg, "secret", &secret);
 
 	config_setting_t *webs_cfg = config_lookup(&cfg, "webs");
@@ -333,10 +363,11 @@ int main(int argc, char **argv) {
 	signal(SIGPIPE, SIG_IGN);
 
 	// Start worker threads for this
+	RateLimiter globalrl(auths_per_second);
 	ConcurrentQueue<std::unique_ptr<FCGX_Request>> reqqueue;
 	std::vector<std::unique_ptr<AuthenticationServer>> workers;
 	for (int i = 0; i < nthreads; i++)
-		workers.emplace_back(new AuthenticationServer(&reqqueue, secret));
+		workers.emplace_back(new AuthenticationServer(&reqqueue, secret, &globalrl));
 
 	std::cerr << "All workers up, serving until SIGINT/SIGTERM" << std::endl;
 
