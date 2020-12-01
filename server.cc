@@ -228,53 +228,53 @@ public:
 		std::unique_ptr<FCGX_Request> req;
 		while (rq->pop(&req)) {
 			// Read request body and validate it
-			long bsize = atol(FCGX_GetParam("CONTENT_LENGTH", req->envp));
-			if (bsize < MAX_REQ_SIZE) {
-				// Get streams to write
-				fcgi_streambuf reqout(req->out);
-				fcgi_streambuf reqin(req->in);
-				std::iostream obuf(&reqout);
-				std::iostream ibuf(&reqin);
+			int bsize = atoi(FCGX_GetParam("CONTENT_LENGTH", req->envp));
+			bsize = std::max(0, std::min(bsize, MAX_REQ_SIZE));
 
-				char body[MAX_REQ_SIZE+1];
-				ibuf.read(body, bsize);
-				body[bsize] = 0;
+			// Get streams to write
+			fcgi_streambuf reqout(req->out);
+			fcgi_streambuf reqin(req->in);
+			std::iostream obuf(&reqout);
+			std::iostream ibuf(&reqin);
 
-				// Find out basic info
-				web_req wreq;
-				wreq.method   = FCGX_GetParam("REQUEST_METHOD", req->envp) ?: "";
-				wreq.uri      = FCGX_GetParam("DOCUMENT_URI", req->envp) ?: "";
-				wreq.getvars  = parse_vars(FCGX_GetParam("QUERY_STRING", req->envp) ?: "");
-				wreq.postvars = parse_vars(body);
-				wreq.host     = FCGX_GetParam("HTTP_HOST", req->envp) ?: "";
-				wreq.cookies  = parse_cookies(FCGX_GetParam("HTTP_COOKIE", req->envp) ?: "");
+			char body[MAX_REQ_SIZE+1];
+			ibuf.read(body, bsize);
+			body[bsize] = 0;
 
-				// Extract source IP
-				const char *sip = FCGX_GetParam("REMOTE_ADDR", req->envp) ?: "0.0.0.0";
-				struct in6_addr res6; struct in_addr res4;
-				if (inet_pton(AF_INET6, sip, &res6) == 1)
-					wreq.ip64 = ((uint64_t)res6.s6_addr[0] << 40) | ((uint64_t)res6.s6_addr[1] << 32) |
-					            ((uint64_t)res6.s6_addr[2] << 24) | ((uint64_t)res6.s6_addr[3] << 16) |
-					            ((uint64_t)res6.s6_addr[4] <<  8) | ((uint64_t)res6.s6_addr[5]);
-				else if (inet_pton(AF_INET, sip, &res4) == 1)
-					wreq.ip64 = res4.s_addr;
-				else
-					wreq.ip64 = 0;
+			// Find out basic info
+			web_req wreq;
+			wreq.method   = FCGX_GetParam("REQUEST_METHOD", req->envp) ?: "";
+			wreq.uri      = FCGX_GetParam("DOCUMENT_URI", req->envp) ?: "";
+			wreq.getvars  = parse_vars(FCGX_GetParam("QUERY_STRING", req->envp) ?: "");
+			wreq.postvars = parse_vars(body);
+			wreq.host     = FCGX_GetParam("HTTP_HOST", req->envp) ?: "";
+			wreq.cookies  = parse_cookies(FCGX_GetParam("HTTP_COOKIE", req->envp) ?: "");
 
-				// Lookup hostname for this request
-				if (!webcfg.count(wreq.host)) {
-					std::cerr << "Failed to find host " << wreq.host << std::endl;
-					obuf << "Status: 500\r\nContent-Type: text/plain\r\n"
-						 << "Content-Length: " << (wreq.host.size() + 18) << "\r\n\r\n"
-						 << "Unknown hostname: " << wreq.host;
-				}
-				else {
-					const web_t* wptr = &webcfg.at(wreq.host);
-					std::string resp = process_req(&wreq, wptr);
+			// Extract source IP
+			const char *sip = FCGX_GetParam("REMOTE_ADDR", req->envp) ?: "0.0.0.0";
+			struct in6_addr res6; struct in_addr res4;
+			if (inet_pton(AF_INET6, sip, &res6) == 1)
+				wreq.ip64 = ((uint64_t)res6.s6_addr[0] << 40) | ((uint64_t)res6.s6_addr[1] << 32) |
+				            ((uint64_t)res6.s6_addr[2] << 24) | ((uint64_t)res6.s6_addr[3] << 16) |
+				            ((uint64_t)res6.s6_addr[4] <<  8) | ((uint64_t)res6.s6_addr[5]);
+			else if (inet_pton(AF_INET, sip, &res4) == 1)
+				wreq.ip64 = res4.s_addr;
+			else
+				wreq.ip64 = 0;
 
-					// Respond with an immediate update JSON encoded too
-					obuf << resp;
-				}
+			// Lookup hostname for this request
+			if (!webcfg.count(wreq.host)) {
+				std::cerr << "Failed to find host " << wreq.host << std::endl;
+				obuf << "Status: 500\r\nContent-Type: text/plain\r\n"
+					 << "Content-Length: " << (wreq.host.size() + 18) << "\r\n\r\n"
+					 << "Unknown hostname: " << wreq.host;
+			}
+			else {
+				const web_t* wptr = &webcfg.at(wreq.host);
+				std::string resp = process_req(&wreq, wptr);
+
+				// Respond with an immediate update JSON encoded too
+				obuf << resp;
 			}
 
 			FCGX_Finish_r(req.get());
@@ -300,8 +300,8 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-    config_t cfg;
-    config_init(&cfg);
+	config_t cfg;
+	config_init(&cfg);
 	if (!config_read_file(&cfg, argv[1]))
 		RET_ERR("Error reading config file");
 
