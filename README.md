@@ -21,6 +21,8 @@ itself. A config file can look like:
 
 ```
 nthreads = 4;
+auth_per_second = 2;
+totp_generations = 1;
 secret = "some-random-string-that-is-relatively-long-used-for-cookie-minting";
 webs = (
   {
@@ -31,6 +33,8 @@ webs = (
         username = "user1";
         password = "password123!";
         totp = "base32otpsecretgoeshere";
+        digits = 6;
+        period = 30;
         duration = 3600;
       }
     );
@@ -43,6 +47,8 @@ webs = (
         username = "user2";
         password = "password123456";
         totp = "base32otpsecretgoeshere";
+        digits = 6;
+        period = 30;
         duration = 7200;
       }
     );

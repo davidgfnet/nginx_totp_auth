@@ -15,6 +15,7 @@
 #include <mutex>
 #include <regex>
 #include <memory>
+#include <cmath>
 #include <unordered_map>
 #include <fstream>
 #include <fcgio.h>
@@ -44,6 +45,8 @@ typedef std::unordered_map<std::string, std::string> StrMap;
 
 struct cred_t {
 	std::string password, totp;  // Pass and TOTP (binary)
+	uint8_t digits;              // Digits of TOTP
+	uint32_t period;             // Period of TOTP
 	unsigned sduration;          // Duration of a valid session (seconds)
 };
 
@@ -130,7 +133,7 @@ private:
 			if (rl->check(req->ip64)) {
 				std::cerr << "Rate limit hit for ip id " << req->ip64 << std::endl;
 				return "Status: 429\r\nContent-Type: text/plain\r\n"
-					   "Content-Length: 34\r\n\r\nToo many requests, request blocked";
+				       "Content-Length: 34\r\n\r\nToo many requests, request blocked";
 			}
 			rl->consume(req->ip64);
 
@@ -143,7 +146,7 @@ private:
 				// Validate the authentication to issue a cookie or throw an error
 				if (wcfg->users.count(user) &&
 				    wcfg->users.at(user).password == pass &&
-					totp_valid(wcfg->users.at(user).totp, totp, totp_generations)) {
+				    totp_valid(wcfg->users.at(user), totp, totp_generations)) {
 
 					std::cerr << "Login with user " << user << " successful" << std::endl;
 
@@ -193,15 +196,15 @@ public:
 		cthread.join();
 	}
 
-	bool totp_valid(std::string key, unsigned input, unsigned generations) {
-		uint32_t ct = time(0) / 30UL;
+	bool totp_valid(cred_t user, unsigned input, unsigned generations) {
+		uint32_t ct = time(0) / user.period;
 		for (int i = -(signed)generations; i < (signed)generations; i++)
-			if (totp_calc(key, ct + i) == input)
+			if (totp_calc(user.totp, user.digits, ct + i) == input)
 				return true;
 		return false;
 	}
 
-	static unsigned totp_calc(std::string key, uint32_t epoch) {
+	static unsigned totp_calc(std::string key, uint8_t digits, uint32_t epoch) {
 		// Key comes in binary format already!
 		// Concatenate the epoc in big endian fashion
 		uint8_t msg [8] = {
@@ -220,7 +223,7 @@ public:
 		// The result is a substr in hash at that offset (pick 32 bits)
 		uint32_t value = (hash[off] << 24) | (hash[off+1] << 16) | (hash[off+2] << 8) | hash[off+3];
 		value &= 0x7fffffff;
-		return value % 1000000;
+		return value % ((uint32_t)pow(10, digits));
 	}
 
 	// Receives requests and processes them by replying via a side http call.
@@ -340,6 +343,8 @@ int main(int argc, char **argv) {
 			config_setting_t *user = config_setting_get_member(userentry, "username");
 			config_setting_t *pass = config_setting_get_member(userentry, "password");
 			config_setting_t *totp = config_setting_get_member(userentry, "totp");
+			config_setting_t *digi = config_setting_get_member(userentry, "digits");
+			config_setting_t *peri = config_setting_get_member(userentry, "period");
 			config_setting_t *durt = config_setting_get_member(userentry, "duration");
 
 			if (!user || !pass || !totp || !durt)
@@ -348,6 +353,8 @@ int main(int argc, char **argv) {
 			wentry.users[config_setting_get_string(user)] = cred_t {
 				.password = config_setting_get_string(pass),
 				.totp = b32dec(b32pad(config_setting_get_string(totp))),
+				.digits = !digi ? 6 : (uint8_t)config_setting_get_int(digi),
+				.period = !peri ? 30UL : (uint32_t)config_setting_get_int(peri),
 				.sduration = (unsigned)config_setting_get_int(durt), };
 		}
 
