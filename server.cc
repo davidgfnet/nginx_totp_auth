@@ -175,7 +175,7 @@ private:
 
 					// Render a redirect page to the redirect address (+cookie)
 					std::string token = create_cookie(user);
-					return "Status: 302\r\nSet-Cookie: authentication-token=" + token +
+					return "Status: 302\r\nSet-Cookie: authentication-token=" + token + "; Path=/" +
 					       "\r\nLocation: " + stripnl(rpage) + "\r\n\r\n";
 				}
 				else
