@@ -242,10 +242,6 @@ public:
 		std::string hashs;
 		unsigned lastbyte;
 		switch (algorithm) {
-			case 1:
-				hashs = hmac_sha1(key, std::string((char*)msg, sizeof(msg)));
-				lastbyte = 19;
-				break;
 			case 256:
 				hashs = hmac_sha256(key, std::string((char*)msg, sizeof(msg)));
 				lastbyte = 31;
@@ -253,6 +249,11 @@ public:
 			case 512:
 				hashs = hmac_sha512(key, std::string((char*)msg, sizeof(msg)));
 				lastbyte = 63;
+				break;
+			case 1:
+			default:
+				hashs = hmac_sha1(key, std::string((char*)msg, sizeof(msg)));
+				lastbyte = 19;
 				break;
 		}
 		uint8_t *hash = (uint8_t*)hashs.c_str();
