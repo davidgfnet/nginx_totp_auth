@@ -38,6 +38,11 @@ int nthreads = 4;
 // 2 would mean the last 2 and future 2 are valid, and so on.
 unsigned totp_generations = 1;
 
+const char* default_path_prefix = "";
+const char* default_auth_path = "/auth";
+const char* default_login_path = "/login";
+const char* default_logout_path = "/logout";
+
 #define MAX_REQ_SIZE    (4*1024)
 #define RET_ERR(x) { std::cerr << x << std::endl; return 1; }
 
@@ -52,6 +57,9 @@ struct cred_t {
 
 struct web_t {
 	std::string webtemplate;   // Template to use
+	std::string auth_path;     // Path for nginx auth endpoint
+	std::string login_path;    // Path for login endpoint
+	std::string logout_path;   // Path for logout endpoint
 	bool totp_only;            // Only TOTP, without username/password
 	std::unordered_map<std::string, cred_t> users;  // User to credential
 };
@@ -133,7 +141,7 @@ private:
 		if (rpage.empty())
 			rpage = "/";    // Make sure we never return empty location, default to index
 
-		if (req->uri == "/auth") {
+		if (req->uri == wcfg->auth_path) {
 			// Read cookie and validate the authorization
 			bool authed = check_cookie(req->cookies["authentication-token"], wcfg);
 			if (authed)
@@ -143,7 +151,7 @@ private:
 				return "Status: 401\r\nContent-Type: text/plain\r\n"
 				       "Content-Length: 21\r\n\r\nAuthentication Denied";
 		}
-		else if (req->uri == "/login") {
+		else if (req->uri == wcfg->login_path) {
 			// Die hard if someone's bruteforcing this
 			if (rl->check(req->ip64)) {
 				std::cerr << "Rate limit hit for ip id " << req->ip64 << std::endl;
@@ -179,18 +187,18 @@ private:
 				return "Status: 500\r\nContent-Type: text/plain\r\n"
 					   "Content-Length: 23\r\n\r\nCould not find template";
 			else {
-				std::string page = templates.at(wcfg->webtemplate)(req->host, rpage, wcfg->totp_only, lerror);
+				std::string page = templates.at(wcfg->webtemplate)(req->host, rpage, wcfg->login_path, wcfg->totp_only, lerror);
 				return "Status: 200\r\nContent-Type: text/html\r\n"
 					   "Content-Length: " + std::to_string(page.size()) + "\r\n\r\n" + page;
 			}
 		}
-		else if (req->uri == "/logout") {
+		else if (req->uri == wcfg->logout_path) {
 			// Just redirect to the page (if present, otherwise login) deleting cookie
 			return "Status: 302\r\nSet-Cookie: authentication-token=null\r\n"
 				   "Location: /login\r\n\r\n";
 		}
 		return "Status: 404\r\nContent-Type: text/plain\r\n"
-			   "Content-Length: 48\r\nNot found, valid endpoints: /auth /login /logout\r\n\r\n";
+			   "Content-Length: 48\r\nNot found, valid endpoints: " + wcfg->auth_path + " " + wcfg->login_path + " "  + wcfg->logout_path + " " + "\r\n\r\n";
 	}
 
 public:
@@ -331,6 +339,11 @@ int main(int argc, char **argv) {
 	config_lookup_int(&cfg, "auth_per_second", (int*)&auths_per_second);
 	// Number of generations to consider valid for an OTP code
 	config_lookup_int(&cfg, "totp_generations", (int*)&totp_generations);
+	// Default pathes
+	config_lookup_string(&cfg, "path_prefix", &default_path_prefix);
+	config_lookup_string(&cfg, "auth_path", &default_auth_path);
+	config_lookup_string(&cfg, "login_path", &default_login_path);
+	config_lookup_string(&cfg, "logout_path", &default_logout_path);
 	// Secret holds the server secret used to create cookies
 	const char *secret = "";
 	config_lookup_string(&cfg, "secret", &secret);
@@ -347,13 +360,22 @@ int main(int argc, char **argv) {
 		config_setting_t *hostname  = config_setting_get_member(webentry, "hostname");
 		config_setting_t *wtemplate = config_setting_get_member(webentry, "template");
 		config_setting_t *totp_only = config_setting_get_member(webentry, "totp_only");
+		config_setting_t *path_prefix = config_setting_get_member(webentry, "path_prefix");
+		config_setting_t *auth_path = config_setting_get_member(webentry, "auth_path");
+		config_setting_t *login_path = config_setting_get_member(webentry, "login_path");
+		config_setting_t *logout_path = config_setting_get_member(webentry, "logout_path");
 		config_setting_t *users_cfg = config_setting_lookup(webentry, "users");
 
 		if (!webentry || !hostname || !wtemplate || !users_cfg)
 			RET_ERR("hostname, template and users must be present in the web group");
 
+		const char* wpath_prefix = !path_prefix ? default_path_prefix : config_setting_get_string(path_prefix);
+
 		web_t wentry = {
 			.webtemplate = config_setting_get_string(wtemplate),
+			.auth_path = std::string(wpath_prefix).append(!auth_path ? default_auth_path : config_setting_get_string(auth_path)),
+			.login_path = std::string(wpath_prefix).append(!login_path ? default_login_path : config_setting_get_string(login_path)),
+			.logout_path = std::string(wpath_prefix).append(!logout_path ? default_logout_path : config_setting_get_string(logout_path)),
 			.totp_only = !totp_only ? false : config_setting_get_bool(totp_only) == CONFIG_TRUE, };
 
 		for (int j = 0; j < config_setting_length(users_cfg); j++) {

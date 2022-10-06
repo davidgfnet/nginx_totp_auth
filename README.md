@@ -23,6 +23,10 @@ itself. A config file can look like:
 nthreads = 4;
 auth_per_second = 2;
 totp_generations = 1;
+path_prefix = "";
+auth_path = "/auth";
+login_path = "/login";
+logout_path = "/logout";
 secret = "some-random-string-that-is-relatively-long-used-for-cookie-minting";
 webs = (
   {
@@ -48,6 +52,8 @@ webs = (
   {
     hostname = "anotherweb.com";
     template = "customtemplate";
+    path_prefix = "/all-paths-will-prefix-with-this"
+    auth_path = "/something-else"
     totp_only = true;
     users = (
       {
