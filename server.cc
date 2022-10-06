@@ -62,6 +62,7 @@ struct web_t {
 	std::string login_path;    // Path for login endpoint
 	std::string logout_path;   // Path for logout endpoint
 	bool totp_only;            // Only TOTP, without username/password
+	unsigned totp_generations; // see comment for global totp_generations
 	std::unordered_map<std::string, cred_t> users;  // User to credential
 };
 
@@ -124,14 +125,14 @@ private:
 	bool validate_cred(std::string user, std::string pass, unsigned totp, const web_t *wcfg) {
 		if (wcfg->totp_only) {
 			for (auto pair : wcfg->users)
-				if (totp_valid(pair.second, totp, totp_generations))
+				if (totp_valid(pair.second, totp, wcfg->totp_generations))
 					return true;
 			return false;
 		}
 		else {
 			return wcfg->users.count(user) &&
 			       wcfg->users.at(user).password == pass &&
-			       totp_valid(wcfg->users.at(user), totp, totp_generations);
+			       totp_valid(wcfg->users.at(user), totp, wcfg->totp_generations);
 		}
 	}
 
@@ -377,6 +378,7 @@ int main(int argc, char **argv) {
 		config_setting_t *hostname  = config_setting_get_member(webentry, "hostname");
 		config_setting_t *wtemplate = config_setting_get_member(webentry, "template");
 		config_setting_t *totp_only = config_setting_get_member(webentry, "totp_only");
+		config_setting_t *totp_gens = config_setting_get_member(webentry, "totp_generations");
 		config_setting_t *path_prefix = config_setting_get_member(webentry, "path_prefix");
 		config_setting_t *auth_path = config_setting_get_member(webentry, "auth_path");
 		config_setting_t *login_path = config_setting_get_member(webentry, "login_path");
@@ -393,7 +395,8 @@ int main(int argc, char **argv) {
 			.auth_path = std::string(wpath_prefix).append(!auth_path ? default_auth_path : config_setting_get_string(auth_path)),
 			.login_path = std::string(wpath_prefix).append(!login_path ? default_login_path : config_setting_get_string(login_path)),
 			.logout_path = std::string(wpath_prefix).append(!logout_path ? default_logout_path : config_setting_get_string(logout_path)),
-			.totp_only = !totp_only ? false : config_setting_get_bool(totp_only) == CONFIG_TRUE, };
+			.totp_only = !totp_only ? false : config_setting_get_bool(totp_only) == CONFIG_TRUE,
+			.totp_generations = !totp_gens ? totp_generations : (unsigned)config_setting_get_int(totp_gens), };
 
 		for (int j = 0; j < config_setting_length(users_cfg); j++) {
 			config_setting_t *userentry = config_setting_get_elem(users_cfg, j);

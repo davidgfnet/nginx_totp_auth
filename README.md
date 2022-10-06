@@ -56,6 +56,7 @@ webs = (
     path_prefix = "/all-paths-will-prefix-with-this"
     auth_path = "/something-else"
     totp_only = true;
+    totp_generations = 0;
     users = (
       {
         username = "more-like-remainder-here";
