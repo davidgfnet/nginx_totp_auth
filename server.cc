@@ -215,7 +215,7 @@ public:
 
 	bool totp_valid(cred_t user, unsigned input, unsigned generations) {
 		uint32_t ct = time(0) / user.period;
-		for (int i = -(signed)generations; i < (signed)generations; i++)
+		for (int i = -(signed)generations; i <= (signed)generations; i++)
 			if (totp_calc(user.totp, user.algorithm, user.digits, ct + i) == input)
 				return true;
 		return false;
