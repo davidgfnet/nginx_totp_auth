@@ -43,6 +43,7 @@ webs = (
         username = "user2";
         password = "password123!";
         totp = "base32otpsecretgoeshere";
+        algorithm = 512;
         digits = 6;
         period = 30;
         duration = 3600;
@@ -76,7 +77,8 @@ at startup, and this will cause logout of all users on a server restart.
 `hostname` must match the hostname for the vhost in the nginx configuration. Then
 for each entry a list of users can be defined with their username, password and
 totp secret (base32 encoded string). Can also specify optional advanced option for
-TOTP digits and period. The duration is the cookie lifetime in seconds.
+TOTP digits, period and algorithm (1 = HMAC-SHA1, 256 = HMAC-SHA256, 512 = HMAC-SHA512).
+The duration is the cookie lifetime in seconds.
 
 For TOTP Only mode, all users (totp secrets) are tried, any one matches will pass
 the authentication.

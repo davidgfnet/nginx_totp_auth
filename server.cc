@@ -50,6 +50,7 @@ typedef std::unordered_map<std::string, std::string> StrMap;
 
 struct cred_t {
 	std::string password, totp;  // Pass and TOTP (binary)
+	uint16_t algorithm;          // TOTP Algorithm -> HMAC-SHA<X>
 	uint8_t digits;              // Digits of TOTP
 	uint32_t period;             // Period of TOTP
 	unsigned sduration;          // Duration of a valid session (seconds)
@@ -222,12 +223,12 @@ public:
 	bool totp_valid(cred_t user, unsigned input, unsigned generations) {
 		uint32_t ct = time(0) / user.period;
 		for (int i = -(signed)generations; i < (signed)generations; i++)
-			if (totp_calc(user.totp, user.digits, ct + i) == input)
+			if (totp_calc(user.totp, user.algorithm, user.digits, ct + i) == input)
 				return true;
 		return false;
 	}
 
-	static unsigned totp_calc(std::string key, uint8_t digits, uint32_t epoch) {
+	static unsigned totp_calc(std::string key, uint16_t algorithm, uint8_t digits, uint32_t epoch) {
 		// Key comes in binary format already!
 		// Concatenate the epoc in big endian fashion
 		uint8_t msg [8] = {
@@ -238,11 +239,26 @@ public:
 			(uint8_t)(epoch & 255)
 		};
 
-		std::string hashs = hmac_sha1(key, std::string((char*)msg, sizeof(msg)));
+		std::string hashs;
+		unsigned lastbyte;
+		switch (algorithm) {
+			case 1:
+				hashs = hmac_sha1(key, std::string((char*)msg, sizeof(msg)));
+				lastbyte = 19;
+				break;
+			case 256:
+				hashs = hmac_sha256(key, std::string((char*)msg, sizeof(msg)));
+				lastbyte = 31;
+				break;
+			case 512:
+				hashs = hmac_sha512(key, std::string((char*)msg, sizeof(msg)));
+				lastbyte = 63;
+				break;
+		}
 		uint8_t *hash = (uint8_t*)hashs.c_str();
 
 		// The last nibble of the hash is an offset:
-		unsigned off = hash[19] & 15;
+		unsigned off = hash[lastbyte] & 15;
 		// The result is a substr in hash at that offset (pick 32 bits)
 		uint32_t value = (hash[off] << 24) | (hash[off+1] << 16) | (hash[off+2] << 8) | hash[off+3];
 		value &= 0x7fffffff;
@@ -383,6 +399,7 @@ int main(int argc, char **argv) {
 			config_setting_t *user = config_setting_get_member(userentry, "username");
 			config_setting_t *pass = config_setting_get_member(userentry, "password");
 			config_setting_t *totp = config_setting_get_member(userentry, "totp");
+			config_setting_t *algo = config_setting_get_member(userentry, "algorithm");
 			config_setting_t *digi = config_setting_get_member(userentry, "digits");
 			config_setting_t *peri = config_setting_get_member(userentry, "period");
 			config_setting_t *durt = config_setting_get_member(userentry, "duration");
@@ -395,6 +412,7 @@ int main(int argc, char **argv) {
 			wentry.users[config_setting_get_string(user)] = cred_t {
 				.password = !pass ? "" : config_setting_get_string(pass),
 				.totp = b32dec(b32pad(config_setting_get_string(totp))),
+				.algorithm = !algo ? 1 : (uint16_t)config_setting_get_int(algo),
 				.digits = !digi ? 6 : (uint8_t)config_setting_get_int(digi),
 				.period = !peri ? 30UL : (uint32_t)config_setting_get_int(peri),
 				.sduration = (unsigned)config_setting_get_int(durt), };
