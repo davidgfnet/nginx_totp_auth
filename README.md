@@ -42,10 +42,10 @@ webs = (
   {
     hostname = "anotherweb.com";
     template = "customtemplate";
+    totp_only = true;
     users = (
       {
-        username = "user2";
-        password = "password123456";
+        username = "more-like-remainder-here";
         totp = "base32otpsecretgoeshere";
         digits = 6;
         period = 30;
@@ -64,6 +64,9 @@ at startup, and this will cause logout of all users on a server restart.
 `hostname` must match the hostname for the vhost in the nginx configuration. Then
 for each entry a list of users can be defined with their username, password and
 totp secret (base32 encoded string). The duration is the cookie lifetime in seconds.
+
+For TOTP Only mode, all users (totp secrets) are tried, any one matches will pass
+the authentication.
 
 The authenticator supports templates. By default there's one called "gradient", but
 more can be added. The templates are built in, so one must recompile the binary

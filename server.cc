@@ -52,6 +52,7 @@ struct cred_t {
 
 struct web_t {
 	std::string webtemplate;   // Template to use
+	bool totp_only;            // Only TOTP, without username/password
 	std::unordered_map<std::string, cred_t> users;  // User to credential
 };
 
@@ -111,6 +112,20 @@ private:
 		return (hmac == hmac_calc);
 	}
 
+	bool validate_cred(std::string user, std::string pass, unsigned totp, const web_t *wcfg) {
+		if (wcfg->totp_only) {
+			for (auto pair : wcfg->users)
+				if (totp_valid(pair.second, totp, totp_generations))
+					return true;
+			return false;
+		}
+		else {
+			return wcfg->users.count(user) &&
+			       wcfg->users.at(user).password == pass &&
+			       totp_valid(wcfg->users.at(user), totp, totp_generations);
+		}
+	}
+
 	std::string process_req(web_req *req, const web_t *wcfg) {
 		std::string rpage = req->getvars["follow_page"];
 		if (rpage.empty())
@@ -142,12 +157,12 @@ private:
 				std::string user = req->postvars["username"];
 				std::string pass = req->postvars["password"];
 				unsigned    totp = atoi(req->postvars["totp"].c_str());
-				std::cerr << "Login attempt for user " << user << std::endl;
+				if (wcfg->totp_only)
+					std::cerr << "Login attempt at " << req->host << std::endl;
+				else
+					std::cerr << "Login attempt for user " << user << " at " << req->host << std::endl;
 				// Validate the authentication to issue a cookie or throw an error
-				if (wcfg->users.count(user) &&
-				    wcfg->users.at(user).password == pass &&
-				    totp_valid(wcfg->users.at(user), totp, totp_generations)) {
-
+				if (validate_cred(user, pass, totp, wcfg)) {
 					std::cerr << "Login with user " << user << " successful" << std::endl;
 
 					// Render a redirect page to the redirect address (+cookie)
@@ -164,7 +179,7 @@ private:
 				return "Status: 500\r\nContent-Type: text/plain\r\n"
 					   "Content-Length: 23\r\n\r\nCould not find template";
 			else {
-				std::string page = templates.at(wcfg->webtemplate)(req->host, rpage, lerror);
+				std::string page = templates.at(wcfg->webtemplate)(req->host, rpage, wcfg->totp_only, lerror);
 				return "Status: 200\r\nContent-Type: text/html\r\n"
 					   "Content-Length: " + std::to_string(page.size()) + "\r\n\r\n" + page;
 			}
@@ -331,12 +346,15 @@ int main(int argc, char **argv) {
 		config_setting_t *webentry  = config_setting_get_elem(webs_cfg, i);
 		config_setting_t *hostname  = config_setting_get_member(webentry, "hostname");
 		config_setting_t *wtemplate = config_setting_get_member(webentry, "template");
+		config_setting_t *totp_only = config_setting_get_member(webentry, "totp_only");
 		config_setting_t *users_cfg = config_setting_lookup(webentry, "users");
 
 		if (!webentry || !hostname || !wtemplate || !users_cfg)
 			RET_ERR("hostname, template and users must be present in the web group");
 
-		web_t wentry = { .webtemplate = config_setting_get_string(wtemplate)};
+		web_t wentry = {
+			.webtemplate = config_setting_get_string(wtemplate),
+			.totp_only = !totp_only ? false : config_setting_get_bool(totp_only) == CONFIG_TRUE, };
 
 		for (int j = 0; j < config_setting_length(users_cfg); j++) {
 			config_setting_t *userentry = config_setting_get_elem(users_cfg, j);
@@ -347,11 +365,13 @@ int main(int argc, char **argv) {
 			config_setting_t *peri = config_setting_get_member(userentry, "period");
 			config_setting_t *durt = config_setting_get_member(userentry, "duration");
 
-			if (!user || !pass || !totp || !durt)
-				RET_ERR("username, password, totp and duration must be present in the user group");
+			if (!wentry.totp_only && !pass)
+				RET_ERR("either set web group to TOTP only mode or password must be present in the user group");
+			if (!user || !totp || !durt)
+				RET_ERR("username, totp and duration must be present in the user group");
 
 			wentry.users[config_setting_get_string(user)] = cred_t {
-				.password = config_setting_get_string(pass),
+				.password = !pass ? "" : config_setting_get_string(pass),
 				.totp = b32dec(b32pad(config_setting_get_string(totp))),
 				.digits = !digi ? 6 : (uint8_t)config_setting_get_int(digi),
 				.period = !peri ? 30UL : (uint32_t)config_setting_get_int(peri),

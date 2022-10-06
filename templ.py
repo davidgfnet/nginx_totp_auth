@@ -5,7 +5,7 @@ import os, re
 
 # Produce a usable header
 assetsh =  b"#include <string>\n#include <unordered_map>\n"
-assetsh += b"typedef std::string(*t_templatefn)(std::string, std::string, bool);\n"
+assetsh += b"typedef std::string(*t_templatefn)(std::string, std::string, bool, bool);\n"
 assetsh += b"extern const std::unordered_map<std::string, t_templatefn> templates;\n"
 
 # Read template HTML files and generate templates.cc asset
@@ -17,9 +17,10 @@ for i,f in enumerate(sorted(os.listdir("templates/"))):
 		cont = cont.replace(b"\\", b"\\\\").replace(b'"', b'\\"').replace(b"\n", b"\\n")
 		cont = cont.replace(b"{{hostname}}", b'" + hostname + "')
 		cont = cont.replace(b"{{follow_page}}", b'" + follow_page + "')
+		cont = re.sub(b"{{nototponly}}(.*){{/nototponly}}", b'" + (totp_only ? "" : "\\1") + "', cont)
 		cont = re.sub(b"{{loginfailed}}(.*){{/loginfailed}}", b'" + (err ? "\\1" : "") + "', cont)
 
-		assets += b"std::string login_%d(std::string hostname, std::string follow_page, bool err) {\n" % i
+		assets += b"std::string login_%d(std::string hostname, std::string follow_page, bool totp_only, bool err) {\n" % i
 		assets += b"return \"" + cont + b"\";\n}\n"
 
 		fnentries.append(b"  {\"%s\", %s},\n" % (f.split(".")[0].encode("utf-8"), b"login_%d" % i))
