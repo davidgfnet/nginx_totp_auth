@@ -21,6 +21,12 @@ itself. A config file can look like:
 
 ```
 nthreads = 4;
+auth_per_second = 2;
+totp_generations = 1;
+path_prefix = "";
+auth_path = "/auth";
+login_path = "/login";
+logout_path = "/logout";
 secret = "some-random-string-that-is-relatively-long-used-for-cookie-minting";
 webs = (
   {
@@ -32,17 +38,31 @@ webs = (
         password = "password123!";
         totp = "base32otpsecretgoeshere";
         duration = 3600;
+      },
+      {
+        username = "user2";
+        password = "password123!";
+        totp = "base32otpsecretgoeshere";
+        algorithm = 512;
+        digits = 6;
+        period = 30;
+        duration = 3600;
       }
     );
   },
   {
     hostname = "anotherweb.com";
     template = "customtemplate";
+    path_prefix = "/all-paths-will-prefix-with-this"
+    auth_path = "/something-else"
+    totp_only = true;
+    totp_generations = 0;
     users = (
       {
-        username = "user2";
-        password = "password123456";
+        username = "more-like-remainder-here";
         totp = "base32otpsecretgoeshere";
+        digits = 6;
+        period = 30;
         duration = 7200;
       }
     );
@@ -57,7 +77,12 @@ at startup, and this will cause logout of all users on a server restart.
 
 `hostname` must match the hostname for the vhost in the nginx configuration. Then
 for each entry a list of users can be defined with their username, password and
-totp secret (base32 encoded string). The duration is the cookie lifetime in seconds.
+totp secret (base32 encoded string). Can also specify optional advanced option for
+TOTP digits, period and algorithm (1 = HMAC-SHA1, 256 = HMAC-SHA256, 512 = HMAC-SHA512).
+The duration is the cookie lifetime in seconds.
+
+For TOTP Only mode, all users (totp secrets) are tried, any one matches will pass
+the authentication.
 
 The authenticator supports templates. By default there's one called "gradient", but
 more can be added. The templates are built in, so one must recompile the binary

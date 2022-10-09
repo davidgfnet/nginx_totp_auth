@@ -15,6 +15,7 @@
 #include <mutex>
 #include <regex>
 #include <memory>
+#include <cmath>
 #include <unordered_map>
 #include <fstream>
 #include <fcgio.h>
@@ -37,6 +38,11 @@ int nthreads = 4;
 // 2 would mean the last 2 and future 2 are valid, and so on.
 unsigned totp_generations = 1;
 
+const char* default_path_prefix = "";
+const char* default_auth_path = "/auth";
+const char* default_login_path = "/login";
+const char* default_logout_path = "/logout";
+
 #define MAX_REQ_SIZE    (4*1024)
 #define RET_ERR(x) { std::cerr << x << std::endl; return 1; }
 
@@ -44,11 +50,19 @@ typedef std::unordered_map<std::string, std::string> StrMap;
 
 struct cred_t {
 	std::string password, totp;  // Pass and TOTP (binary)
+	uint16_t algorithm;          // TOTP Algorithm -> HMAC-SHA<X>
+	uint8_t digits;              // Digits of TOTP
+	uint32_t period;             // Period of TOTP
 	unsigned sduration;          // Duration of a valid session (seconds)
 };
 
 struct web_t {
 	std::string webtemplate;   // Template to use
+	std::string auth_path;     // Path for nginx auth endpoint
+	std::string login_path;    // Path for login endpoint
+	std::string logout_path;   // Path for logout endpoint
+	bool totp_only;            // Only TOTP, without username/password
+	unsigned totp_generations; // see comment for global totp_generations
 	std::unordered_map<std::string, cred_t> users;  // User to credential
 };
 
@@ -108,6 +122,22 @@ private:
 		return (hmac == hmac_calc);
 	}
 
+	bool validate_cred(std::string &user, std::string pass, unsigned totp, const web_t *wcfg) {
+		if (wcfg->totp_only) {
+			for (auto pair : wcfg->users)
+				if (totp_valid(pair.second, totp, wcfg->totp_generations)) {
+					user = pair.first;
+					return true;
+				}
+			return false;
+		}
+		else {
+			return wcfg->users.count(user) &&
+			       wcfg->users.at(user).password == pass &&
+			       totp_valid(wcfg->users.at(user), totp, wcfg->totp_generations);
+		}
+	}
+
 	std::string process_req(web_req *req, const web_t *wcfg) {
 		std::string rpage = req->getvars["follow_page"];
 		if (rpage.empty())
@@ -115,7 +145,7 @@ private:
 		if (rpage.empty())
 			rpage = "/";    // Make sure we never return empty location, default to index
 
-		if (req->uri == "/auth") {
+		if (req->uri == wcfg->auth_path) {
 			// Read cookie and validate the authorization
 			bool authed = check_cookie(req->cookies["authentication-token"], wcfg);
 			if (authed)
@@ -125,12 +155,12 @@ private:
 				return "Status: 401\r\nContent-Type: text/plain\r\n"
 				       "Content-Length: 21\r\n\r\nAuthentication Denied";
 		}
-		else if (req->uri == "/login") {
+		else if (req->uri == wcfg->login_path) {
 			// Die hard if someone's bruteforcing this
 			if (rl->check(req->ip64)) {
 				std::cerr << "Rate limit hit for ip id " << req->ip64 << std::endl;
 				return "Status: 429\r\nContent-Type: text/plain\r\n"
-					   "Content-Length: 34\r\n\r\nToo many requests, request blocked";
+				       "Content-Length: 34\r\n\r\nToo many requests, request blocked";
 			}
 			rl->consume(req->ip64);
 
@@ -139,17 +169,17 @@ private:
 				std::string user = req->postvars["username"];
 				std::string pass = req->postvars["password"];
 				unsigned    totp = atoi(req->postvars["totp"].c_str());
-				std::cerr << "Login attempt for user " << user << std::endl;
+				if (wcfg->totp_only)
+					std::cerr << "Login attempt at " << req->host << std::endl;
+				else
+					std::cerr << "Login attempt for user " << user << " at " << req->host << std::endl;
 				// Validate the authentication to issue a cookie or throw an error
-				if (wcfg->users.count(user) &&
-				    wcfg->users.at(user).password == pass &&
-					totp_valid(wcfg->users.at(user).totp, totp, totp_generations)) {
-
+				if (validate_cred(user, pass, totp, wcfg)) {
 					std::cerr << "Login with user " << user << " successful" << std::endl;
 
 					// Render a redirect page to the redirect address (+cookie)
 					std::string token = create_cookie(user);
-					return "Status: 302\r\nSet-Cookie: authentication-token=" + token +
+					return "Status: 302\r\nSet-Cookie: authentication-token=" + token + "; Path=/" +
 					       "\r\nLocation: " + stripnl(rpage) + "\r\n\r\n";
 				}
 				else
@@ -161,18 +191,18 @@ private:
 				return "Status: 500\r\nContent-Type: text/plain\r\n"
 					   "Content-Length: 23\r\n\r\nCould not find template";
 			else {
-				std::string page = templates.at(wcfg->webtemplate)(req->host, rpage, lerror);
+				std::string page = templates.at(wcfg->webtemplate)(req->host, rpage, wcfg->login_path, wcfg->totp_only, lerror);
 				return "Status: 200\r\nContent-Type: text/html\r\n"
 					   "Content-Length: " + std::to_string(page.size()) + "\r\n\r\n" + page;
 			}
 		}
-		else if (req->uri == "/logout") {
+		else if (req->uri == wcfg->logout_path) {
 			// Just redirect to the page (if present, otherwise login) deleting cookie
 			return "Status: 302\r\nSet-Cookie: authentication-token=null\r\n"
 				   "Location: /login\r\n\r\n";
 		}
 		return "Status: 404\r\nContent-Type: text/plain\r\n"
-			   "Content-Length: 48\r\nNot found, valid endpoints: /auth /login /logout\r\n\r\n";
+			   "Content-Length: 48\r\nNot found, valid endpoints: " + wcfg->auth_path + " " + wcfg->login_path + " "  + wcfg->logout_path + " " + "\r\n\r\n";
 	}
 
 public:
@@ -193,15 +223,15 @@ public:
 		cthread.join();
 	}
 
-	bool totp_valid(std::string key, unsigned input, unsigned generations) {
-		uint32_t ct = time(0) / 30UL;
-		for (int i = -(signed)generations; i < (signed)generations; i++)
-			if (totp_calc(key, ct + i) == input)
+	bool totp_valid(cred_t user, unsigned input, unsigned generations) {
+		uint32_t ct = time(0) / user.period;
+		for (int i = -(signed)generations; i <= (signed)generations; i++)
+			if (totp_calc(user.totp, user.algorithm, user.digits, ct + i) == input)
 				return true;
 		return false;
 	}
 
-	static unsigned totp_calc(std::string key, uint32_t epoch) {
+	static unsigned totp_calc(std::string key, uint16_t algorithm, uint8_t digits, uint32_t epoch) {
 		// Key comes in binary format already!
 		// Concatenate the epoc in big endian fashion
 		uint8_t msg [8] = {
@@ -212,15 +242,31 @@ public:
 			(uint8_t)(epoch & 255)
 		};
 
-		std::string hashs = hmac_sha1(key, std::string((char*)msg, sizeof(msg)));
+		std::string hashs;
+		unsigned lastbyte;
+		switch (algorithm) {
+			case 256:
+				hashs = hmac_sha256(key, std::string((char*)msg, sizeof(msg)));
+				lastbyte = 31;
+				break;
+			case 512:
+				hashs = hmac_sha512(key, std::string((char*)msg, sizeof(msg)));
+				lastbyte = 63;
+				break;
+			case 1:
+			default:
+				hashs = hmac_sha1(key, std::string((char*)msg, sizeof(msg)));
+				lastbyte = 19;
+				break;
+		}
 		uint8_t *hash = (uint8_t*)hashs.c_str();
 
 		// The last nibble of the hash is an offset:
-		unsigned off = hash[19] & 15;
+		unsigned off = hash[lastbyte] & 15;
 		// The result is a substr in hash at that offset (pick 32 bits)
 		uint32_t value = (hash[off] << 24) | (hash[off+1] << 16) | (hash[off+2] << 8) | hash[off+3];
 		value &= 0x7fffffff;
-		return value % 1000000;
+		return value % ((uint32_t)pow(10, digits));
 	}
 
 	// Receives requests and processes them by replying via a side http call.
@@ -313,6 +359,11 @@ int main(int argc, char **argv) {
 	config_lookup_int(&cfg, "auth_per_second", (int*)&auths_per_second);
 	// Number of generations to consider valid for an OTP code
 	config_lookup_int(&cfg, "totp_generations", (int*)&totp_generations);
+	// Default pathes
+	config_lookup_string(&cfg, "path_prefix", &default_path_prefix);
+	config_lookup_string(&cfg, "auth_path", &default_auth_path);
+	config_lookup_string(&cfg, "login_path", &default_login_path);
+	config_lookup_string(&cfg, "logout_path", &default_logout_path);
 	// Secret holds the server secret used to create cookies
 	const char *secret = "";
 	config_lookup_string(&cfg, "secret", &secret);
@@ -328,26 +379,48 @@ int main(int argc, char **argv) {
 		config_setting_t *webentry  = config_setting_get_elem(webs_cfg, i);
 		config_setting_t *hostname  = config_setting_get_member(webentry, "hostname");
 		config_setting_t *wtemplate = config_setting_get_member(webentry, "template");
+		config_setting_t *totp_only = config_setting_get_member(webentry, "totp_only");
+		config_setting_t *totp_gens = config_setting_get_member(webentry, "totp_generations");
+		config_setting_t *path_prefix = config_setting_get_member(webentry, "path_prefix");
+		config_setting_t *auth_path = config_setting_get_member(webentry, "auth_path");
+		config_setting_t *login_path = config_setting_get_member(webentry, "login_path");
+		config_setting_t *logout_path = config_setting_get_member(webentry, "logout_path");
 		config_setting_t *users_cfg = config_setting_lookup(webentry, "users");
 
 		if (!webentry || !hostname || !wtemplate || !users_cfg)
 			RET_ERR("hostname, template and users must be present in the web group");
 
-		web_t wentry = { .webtemplate = config_setting_get_string(wtemplate)};
+		const char* wpath_prefix = !path_prefix ? default_path_prefix : config_setting_get_string(path_prefix);
+
+		web_t wentry = {
+			.webtemplate = config_setting_get_string(wtemplate),
+			.auth_path = std::string(wpath_prefix).append(!auth_path ? default_auth_path : config_setting_get_string(auth_path)),
+			.login_path = std::string(wpath_prefix).append(!login_path ? default_login_path : config_setting_get_string(login_path)),
+			.logout_path = std::string(wpath_prefix).append(!logout_path ? default_logout_path : config_setting_get_string(logout_path)),
+			.totp_only = !totp_only ? false : config_setting_get_bool(totp_only) == CONFIG_TRUE,
+			.totp_generations = !totp_gens ? totp_generations : (unsigned)config_setting_get_int(totp_gens), };
 
 		for (int j = 0; j < config_setting_length(users_cfg); j++) {
 			config_setting_t *userentry = config_setting_get_elem(users_cfg, j);
 			config_setting_t *user = config_setting_get_member(userentry, "username");
 			config_setting_t *pass = config_setting_get_member(userentry, "password");
 			config_setting_t *totp = config_setting_get_member(userentry, "totp");
+			config_setting_t *algo = config_setting_get_member(userentry, "algorithm");
+			config_setting_t *digi = config_setting_get_member(userentry, "digits");
+			config_setting_t *peri = config_setting_get_member(userentry, "period");
 			config_setting_t *durt = config_setting_get_member(userentry, "duration");
 
-			if (!user || !pass || !totp || !durt)
-				RET_ERR("username, password, totp and duration must be present in the user group");
+			if (!wentry.totp_only && !pass)
+				RET_ERR("either set web group to TOTP only mode or password must be present in the user group");
+			if (!user || !totp || !durt)
+				RET_ERR("username, totp and duration must be present in the user group");
 
 			wentry.users[config_setting_get_string(user)] = cred_t {
-				.password = config_setting_get_string(pass),
+				.password = !pass ? "" : config_setting_get_string(pass),
 				.totp = b32dec(b32pad(config_setting_get_string(totp))),
+				.algorithm = !algo ? 1 : (uint16_t)config_setting_get_int(algo),
+				.digits = !digi ? 6 : (uint8_t)config_setting_get_int(digi),
+				.period = !peri ? 30UL : (uint32_t)config_setting_get_int(peri),
 				.sduration = (unsigned)config_setting_get_int(durt), };
 		}
 
