@@ -122,11 +122,13 @@ private:
 		return (hmac == hmac_calc);
 	}
 
-	bool validate_cred(std::string user, std::string pass, unsigned totp, const web_t *wcfg) {
+	bool validate_cred(std::string &user, std::string pass, unsigned totp, const web_t *wcfg) {
 		if (wcfg->totp_only) {
 			for (auto pair : wcfg->users)
-				if (totp_valid(pair.second, totp, wcfg->totp_generations))
+				if (totp_valid(pair.second, totp, wcfg->totp_generations)) {
+					user = pair.first;
 					return true;
+				}
 			return false;
 		}
 		else {
