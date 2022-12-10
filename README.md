@@ -32,6 +32,15 @@ webs = (
         password = "password123!";
         totp = "base32otpsecretgoeshere";
         duration = 3600;
+      },
+      {
+        username = "user2";
+        password = "password123!";
+        totp = "base32otpsecretgoeshere";
+        duration = 3600;
+        algorithm = "sha-512";
+        digits = 6;
+        period = 30;
       }
     );
   },
@@ -43,9 +52,9 @@ webs = (
         username = "user2";
         password = "password123456";
         totp = "base32otpsecretgoeshere";
+        duration = 7200;
         digits = 6;
         period = 30;
-        duration = 7200;
       }
     );
   }
@@ -57,13 +66,18 @@ servers (frontends) in case the service is replicated. This string is used to
 calculate the HMAC for the authentication cookies. If empty, it will be generated
 at startup, and this will cause logout of all users on a server restart.
 
-`hostname` must match the hostname for the vhost in the nginx configuration. Then
-for each entry a list of users can be defined with their username, password and
-totp secret (base32 encoded string). The duration is the cookie lifetime in seconds.
+Each entry in `webs` must have a valid `hostname` which must match the hostname
+for the vhost in the nginx configuration. Since the authenticator supports
+HTML templates for the login website, they must be chosen using the `template`
+variable (currently only one exists: "gradient").
 
-The authenticator supports templates. By default there's one called "gradient", but
-more can be added. The templates are built in, so one must recompile the binary
-to add templates.
+Each web has a list of configured `users` with a `password`, `username` and a
+`totp` secret (base32 encoded). A cookie validity period (in seconds) must be
+specified in `duration`, after this time the user will be logged out.
+Optionally the `digit` count and `period` (in seconds) can be specified, being
+6 and 30 the respective defaults. The default hashing algorithm is SHA1 but can
+be changed by specifying a new `algorithm` with possible values being "sha1",
+"sha-256" and "sha-512".
 
 The service can be run using this example systemd service:
 

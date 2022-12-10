@@ -121,10 +121,24 @@ static std::unordered_map<std::string, std::string> parse_vars(std::string body)
 }
 
 static std::string hmac_sha1(std::string key, std::string msg) {
-	uint8_t hash[20];
+	uint8_t hash[EVP_MAX_MD_SIZE];
 	unsigned hsize = sizeof(hash);
 	HMAC(EVP_sha1(), key.c_str(), key.size(), (uint8_t*)msg.c_str(), msg.size(), hash, &hsize);
-	return std::string((char*)hash, sizeof(hash));
+	return std::string((char*)hash, hsize);
+}
+
+static std::string hmac_sha256(std::string key, std::string msg) {
+	uint8_t hash[EVP_MAX_MD_SIZE];
+	unsigned hsize = sizeof(hash);
+	HMAC(EVP_sha256(), key.c_str(), key.size(), (uint8_t*)msg.c_str(), msg.size(), hash, &hsize);
+	return std::string((char*)hash, hsize);
+}
+
+static std::string hmac_sha512(std::string key, std::string msg) {
+	uint8_t hash[EVP_MAX_MD_SIZE];
+	unsigned hsize = sizeof(hash);
+	HMAC(EVP_sha512(), key.c_str(), key.size(), (uint8_t*)msg.c_str(), msg.size(), hash, &hsize);
+	return std::string((char*)hash, hsize);
 }
 
 static std::string randstr() {

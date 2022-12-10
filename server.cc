@@ -31,8 +31,21 @@
 #include "util.h"
 #include "ratelimit.h"
 
-#define TOTP_DEF_DIGITS       6
-#define TOTP_DEF_PERIOD      30
+#define TOTP_DEF_DIGITS         6
+#define TOTP_DEF_PERIOD        30
+#define TOTP_DEF_ALGO      "sha1"
+
+enum htAlgo {
+	hAlgoSha1    = 0,
+	hAlgoSha256  = 1,
+	hAlgoSha512  = 2
+};
+
+const std::unordered_map<std::string, htAlgo> algnames = {
+	{"sha1",    hAlgoSha1},
+	{"sha-256", hAlgoSha256},
+	{"sha-512", hAlgoSha512},
+};
 
 // Use some reasonable default.
 int nthreads = 4;
@@ -51,6 +64,7 @@ struct cred_t {
 	unsigned sduration;          // Duration of a valid session (seconds)
 	unsigned digits;             // Digits of TOTP
 	unsigned period;             // Period of TOTP
+	htAlgo algorithm;            // TOTP hashing algorithm
 };
 
 struct web_t {
@@ -202,14 +216,17 @@ public:
 	bool totp_valid(cred_t user, unsigned input, unsigned generations) {
 		uint32_t ct = time(0) / user.period;
 		for (int i = -(signed)generations; i < (signed)generations; i++)
-			if (totp_calc(user.totp, user.digits, ct + i) == input)
+			if (totp_calc(user.totp, user.algorithm, user.digits, ct + i) == input)
 				return true;
 		return false;
 	}
 
-	static unsigned totp_calc(std::string key, uint8_t digits, uint32_t epoch) {
+	static unsigned totp_calc(std::string key, htAlgo algo, uint8_t digits, uint32_t epoch) {
 		const uint32_t po10[] = {
 			1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000 };
+		std::string(* const algtbl[])(std::string, std::string) = {
+			hmac_sha1, hmac_sha256, hmac_sha512
+		};
 		// Key comes in binary format already!
 		// Concatenate the epoc in big endian fashion
 		uint8_t msg [8] = {
@@ -220,11 +237,11 @@ public:
 			(uint8_t)(epoch & 255)
 		};
 
-		std::string hashs = hmac_sha1(key, std::string((char*)msg, sizeof(msg)));
+		std::string hashs = algtbl[(unsigned)algo](key, std::string((char*)msg, sizeof(msg)));
 		uint8_t *hash = (uint8_t*)hashs.c_str();
 
 		// The last nibble of the hash is an offset:
-		unsigned off = hash[19] & 15;
+		unsigned off = hash[hashs.size() - 1] & 15;
 		// The result is a substr in hash at that offset (pick 32 bits)
 		uint32_t value = (hash[off] << 24) | (hash[off+1] << 16) | (hash[off+2] << 8) | hash[off+3];
 		value &= 0x7fffffff;
@@ -348,9 +365,12 @@ int main(int argc, char **argv) {
 			config_setting_t *user = config_setting_get_member(userentry, "username");
 			config_setting_t *pass = config_setting_get_member(userentry, "password");
 			config_setting_t *totp = config_setting_get_member(userentry, "totp");
+			config_setting_t *algo = config_setting_get_member(userentry, "algorithm");
 			config_setting_t *digi = config_setting_get_member(userentry, "digits");
 			config_setting_t *peri = config_setting_get_member(userentry, "period");
 			config_setting_t *durt = config_setting_get_member(userentry, "duration");
+
+			std::string algorithm = !algo ? TOTP_DEF_ALGO : config_setting_get_string(algo);
 			int digits = !digi ? TOTP_DEF_DIGITS : config_setting_get_int(digi);
 			int period = !peri ? TOTP_DEF_PERIOD : config_setting_get_int(peri);
 
@@ -360,13 +380,16 @@ int main(int argc, char **argv) {
 				RET_ERR("digits must be between 6 and 9 (included)");
 			if (period <= 0)
 				RET_ERR("period must be bigger than zero");
+			if (!algnames.count(algorithm))
+				RET_ERR("invalid algorithm specified");
 
 			wentry.users[config_setting_get_string(user)] = cred_t {
 				.password = config_setting_get_string(pass),
 				.totp = b32dec(b32pad(config_setting_get_string(totp))),
 				.sduration = (unsigned)config_setting_get_int(durt),
 				.digits = (unsigned)digits,
-				.period = (unsigned)period };
+				.period = (unsigned)period,
+				algnames.at(algorithm) };
 		}
 
 		webcfg[config_setting_get_string(hostname)] = wentry;
