@@ -43,6 +43,8 @@ webs = (
         username = "user2";
         password = "password123456";
         totp = "base32otpsecretgoeshere";
+        digits = 6;
+        period = 30;
         duration = 7200;
       }
     );
