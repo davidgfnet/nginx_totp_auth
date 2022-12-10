@@ -47,6 +47,7 @@ webs = (
   {
     hostname = "anotherweb.com";
     template = "customtemplate";
+    totp_generations = 2;
     users = (
       {
         username = "user2";

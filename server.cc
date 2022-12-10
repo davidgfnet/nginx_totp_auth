@@ -33,6 +33,7 @@
 
 #define TOTP_DEF_DIGITS         6
 #define TOTP_DEF_PERIOD        30
+#define TOTP_DEF_GENS           1      // Allows a window of 90s by default
 #define TOTP_DEF_ALGO      "sha1"
 
 enum htAlgo {
@@ -50,10 +51,6 @@ const std::unordered_map<std::string, htAlgo> algnames = {
 // Use some reasonable default.
 int nthreads = 4;
 
-// 0 means only current code is valid, 1 means past and future code is also valid
-// 2 would mean the last 2 and future 2 are valid, and so on.
-unsigned totp_generations = 1;
-
 #define MAX_REQ_SIZE    (4*1024)
 #define RET_ERR(x) { std::cerr << x << std::endl; return 1; }
 
@@ -68,7 +65,10 @@ struct cred_t {
 };
 
 struct web_t {
-	std::string webtemplate;   // Template to use
+	std::string webtemplate;      // Template to use
+	unsigned totp_generations;    // 0 means only current code is valid,
+	                              // 1 means previous and next code is also valid
+	                              // 2 means the 2 previous and next codes are also valid, etc
 	std::unordered_map<std::string, cred_t> users;  // User to credential
 };
 
@@ -163,7 +163,7 @@ private:
 				// Validate the authentication to issue a cookie or throw an error
 				if (wcfg->users.count(user) &&
 				    wcfg->users.at(user).password == pass &&
-				    totp_valid(wcfg->users.at(user), totp, totp_generations)) {
+				    totp_valid(wcfg->users.at(user), totp, wcfg->totp_generations)) {
 
 					std::cerr << "Login with user " << user << " successful" << std::endl;
 
@@ -336,8 +336,6 @@ int main(int argc, char **argv) {
 	// Number of auth attempts (per ~IP?) per second
 	unsigned auths_per_second = 2;
 	config_lookup_int(&cfg, "auth_per_second", (int*)&auths_per_second);
-	// Number of generations to consider valid for an OTP code
-	config_lookup_int(&cfg, "totp_generations", (int*)&totp_generations);
 	// Secret holds the server secret used to create cookies
 	const char *secret = "";
 	config_lookup_string(&cfg, "secret", &secret);
@@ -353,12 +351,15 @@ int main(int argc, char **argv) {
 		config_setting_t *webentry  = config_setting_get_elem(webs_cfg, i);
 		config_setting_t *hostname  = config_setting_get_member(webentry, "hostname");
 		config_setting_t *wtemplate = config_setting_get_member(webentry, "template");
+		config_setting_t *totp_gens = config_setting_get_member(webentry, "totp_generations");
 		config_setting_t *users_cfg = config_setting_lookup(webentry, "users");
 
 		if (!webentry || !hostname || !wtemplate || !users_cfg)
 			RET_ERR("hostname, template and users must be present in the web group");
 
-		web_t wentry = { .webtemplate = config_setting_get_string(wtemplate)};
+		web_t wentry = {
+			.webtemplate = config_setting_get_string(wtemplate),
+			.totp_generations = !totp_gens ? TOTP_DEF_GENS : (unsigned)config_setting_get_int(totp_gens) };
 
 		for (int j = 0; j < config_setting_length(users_cfg); j++) {
 			config_setting_t *userentry = config_setting_get_elem(users_cfg, j);
