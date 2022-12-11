@@ -1,0 +1,69 @@
+
+# Simple example, ie. a simple static website
+server {
+	listen 443 ssl;
+	ssl_certificate /path/to/cert.pem;
+	ssl_certificate_key /path/to/key.pem;
+	server_name examplehost.com;
+
+	location @error401 {
+		return 302 https://examplehost.com/login?follow_page=$scheme://$http_host$request_uri;
+	}
+
+	# Authentication related endpoints
+	location ~ /(auth|login|logout)$ {
+		include         fastcgi_params;
+		fastcgi_pass    unix:/var/www/totp_auth/sock;
+	}
+
+	# Website root
+	location / {
+		auth_request /auth;
+		error_page 401 = @error401;
+		root /path/to/static/website;
+	}
+}
+
+# Use alternative paths for /login and /logout in case they are already in use
+server {
+	listen 443 ssl;
+	ssl_certificate /path/to/cert.pem;
+	ssl_certificate_key /path/to/key.pem;
+	server_name examplehost.com;
+
+	location @error401 {
+		return 302 https://examplehost.com/login?follow_page=$scheme://$http_host$request_uri;
+	}
+
+	# Authentication related endpoints
+	location ~ /auth $ {
+		include         fastcgi_params;
+		fastcgi_pass    unix:/var/www/totp_auth/sock;
+	}
+	location ~ /your/path/of/choice/login $ {
+		include         fastcgi_params;
+		rewrite         ^/.*$ /login break;
+		fastcgi_pass    unix:/var/www/totp_auth/sock;
+	}
+	location ~ /your/path/of/choice/logout $ {
+		include         fastcgi_params;
+		rewrite         ^/.*$ /logout break;
+		fastcgi_pass    unix:/var/www/totp_auth/sock;
+	}
+
+	# Website root (ie. a PHP website)
+	location / {
+		auth_request /auth;
+		error_page 401 = @error401;
+		root /path/to/website;
+	}
+	location ~ \.php$ {
+		auth_request /auth;
+		error_page 401 = @error401;
+		root /path/to/website;
+		fastcgi_pass unix:/var/run/php/php-fpm.sock;
+		fastcgi_index index.php;
+		include fastcgi_params;
+	}
+}
+
