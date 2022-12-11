@@ -30,6 +30,7 @@
 #include "queue.h"
 #include "util.h"
 #include "ratelimit.h"
+#include "logger.h"
 
 #define TOTP_DEF_DIGITS         6
 #define TOTP_DEF_PERIOD        30
@@ -94,6 +95,9 @@ private:
 	// Rate limiter for auth attempts
 	RateLimiter* const rl;
 
+	// Event logging
+	Logger *logger;
+
 	// Signal end of workers
 	bool end;
 
@@ -138,6 +142,7 @@ private:
 		if (req->uri == "/auth") {
 			// Read cookie and validate the authorization
 			bool authed = check_cookie(req->cookies["authentication-token"], wcfg);
+			logger->log("Requested auth with result: " + std::to_string(authed));
 			if (authed)
 				return "Status: 200\r\nContent-Type: text/plain\r\n"
 				       "Content-Length: 24\r\n\r\nAuthentication Succeeded";
@@ -148,7 +153,7 @@ private:
 		else if (req->uri == "/login") {
 			// Die hard if someone's bruteforcing this
 			if (rl->check(req->ip64)) {
-				std::cerr << "Rate limit hit for ip id " << req->ip64 << std::endl;
+				logger->log("Rate limit hit for ip id " + std::to_string(req->ip64));
 				return "Status: 429\r\nContent-Type: text/plain\r\n"
 				       "Content-Length: 34\r\n\r\nToo many requests, request blocked";
 			}
@@ -159,21 +164,23 @@ private:
 				std::string user = req->postvars["username"];
 				std::string pass = req->postvars["password"];
 				unsigned    totp = atoi(req->postvars["totp"].c_str());
-				std::cerr << "Login attempt for user " << user << std::endl;
+
 				// Validate the authentication to issue a cookie or throw an error
 				if (wcfg->users.count(user) &&
 				    wcfg->users.at(user).password == pass &&
 				    totp_valid(wcfg->users.at(user), totp, wcfg->totp_generations)) {
 
-					std::cerr << "Login with user " << user << " successful" << std::endl;
+					logger->log("Login successful for user " + user);
 
 					// Render a redirect page to the redirect address (+cookie)
 					std::string token = create_cookie(user);
 					return "Status: 302\r\nSet-Cookie: authentication-token=" + token +
 					       "\r\nLocation: " + stripnl(rpage) + "\r\n\r\n";
 				}
-				else
+				else {
+					logger->log("Failed login for user " + user);
 					lerror = true;   // Render login page with err message
+				}
 			}
 
 			// Just renders the login page
@@ -187,18 +194,20 @@ private:
 			}
 		}
 		else if (req->uri == "/logout") {
+			logger->log("Logout requested");
 			// Just redirect to the page (if present, otherwise login) deleting cookie
 			return "Status: 302\r\nSet-Cookie: authentication-token=null\r\n"
 				   "Location: /login\r\n\r\n";
 		}
+		logger->log("Unknown request for URL: " + req->uri);
 		return "Status: 404\r\nContent-Type: text/plain\r\n"
 			   "Content-Length: 48\r\nNot found, valid endpoints: /auth /login /logout\r\n\r\n";
 	}
 
 public:
 	AuthenticationServer(ConcurrentQueue<std::unique_ptr<FCGX_Request>> *rq,
-		std::string csecret, RateLimiter* const rl)
-	: rq(rq), rl(rl), end(false)
+		std::string csecret, RateLimiter* const rl, Logger *logger)
+	: rq(rq), rl(rl), logger(logger), end(false)
 	{
 		// Use work() as thread entry point
 		cthread = std::thread(&AuthenticationServer::work, this);
@@ -289,7 +298,7 @@ public:
 
 			// Lookup hostname for this request
 			if (!webcfg.count(wreq.host)) {
-				std::cerr << "Failed to find host " << wreq.host << std::endl;
+				logger->log("Failed to find host '" + wreq.host + "'");
 				obuf << "Status: 500\r\nContent-Type: text/plain\r\n"
 					 << "Content-Length: " << (wreq.host.size() + 18) << "\r\n\r\n"
 					 << "Unknown hostname: " << wreq.host;
@@ -337,8 +346,13 @@ int main(int argc, char **argv) {
 	unsigned auths_per_second = 2;
 	config_lookup_int(&cfg, "auth_per_second", (int*)&auths_per_second);
 	// Secret holds the server secret used to create cookies
-	const char *secret = "";
-	config_lookup_string(&cfg, "secret", &secret);
+	const char *secret;
+	if (!config_lookup_string(&cfg, "secret", &secret))
+		RET_ERR("'secret' missing, this field is required");
+	// Secret holds the server secret used to create cookies
+	const char *logpath = "/tmp/totp_auth";
+	if (!config_lookup_string(&cfg, "log-path", &logpath))
+		std::cerr << "'log-path' not specified, using default /tmp/totp_auth path" << std::endl;
 
 	config_setting_t *webs_cfg = config_lookup(&cfg, "webs");
 	if (!webs_cfg)
@@ -405,11 +419,13 @@ int main(int argc, char **argv) {
 	signal(SIGPIPE, SIG_IGN);
 
 	// Start worker threads for this
+	auto logger = std::make_unique<Logger>(logpath);
 	RateLimiter globalrl(auths_per_second);
 	ConcurrentQueue<std::unique_ptr<FCGX_Request>> reqqueue;
 	std::vector<std::unique_ptr<AuthenticationServer>> workers;
 	for (int i = 0; i < nthreads; i++)
-		workers.emplace_back(new AuthenticationServer(&reqqueue, secret, &globalrl));
+		workers.emplace_back(new AuthenticationServer(
+			&reqqueue, secret, &globalrl, logger.get()));
 
 	std::cerr << "All workers up, serving until SIGINT/SIGTERM" << std::endl;
 
@@ -427,6 +443,7 @@ int main(int argc, char **argv) {
 	std::cerr << "Signal caught! Starting shutdown" << std::endl;
 	reqqueue.close();
 	workers.clear();
+	logger.release();
 
 	std::cerr << "All clear, service is down" << std::endl;
 }
